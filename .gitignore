@@ -1,0 +1,10 @@
+.DS_Store
+*.py
+*.json
+comparison_*.png
+design_viewport_*.png
+ui_design_*.png
+ui_design_headed_*.png
+web_*.png
+desktop_test.png
+comparison.html
