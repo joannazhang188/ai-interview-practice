@@ -1,5 +1,14 @@
 .DS_Store
 *.py
+!server/main.py
+!server/config.py
+!server/database.py
+!server/models.py
+!server/requirements.txt
+!server/serve_frontend.py
+!server/routers/*.py
+!server/services/*.py
+*.db
 *.json
 comparison_*.png
 design_viewport_*.png

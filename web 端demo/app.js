@@ -1,3 +1,12 @@
+(function loadApi(){
+  var s=document.createElement('script');
+  s.src='api.js';
+  s.onload=function(){console.log('API loaded')};
+  document.head.appendChild(s);
+})();
+var _apiFallback={getResumes:async function(){return[]},getPortfolios:async function(){return[]},getMatchInstances:async function(){return[]},getInterviews:async function(){return[]},pollResult:async function(){return{status:'timeout'}}};
+var api=window.api||_apiFallback;
+
 const app = document.querySelector("#app");
 const pageTitle = document.querySelector("#pageTitle");
 const topTools = document.querySelector("#topTools");
@@ -34,7 +43,7 @@ function clsText(cls){ return ({bd:"▮",ali:"a",hw:"✦",mi:"mi",tx:"腾讯",mt
 function ring(score, size=""){ return `<div class="score-ring ${size}" style="--p:${score}"><span>${score}${size==="lg"?"<small> 分</small>": size==="sm"?"/100":"分"}</span></div>`; }
 function matchRing(score, suffix="%"){ return `<div class="score-ring sm match-ring" style="--p:${score}"><span><strong>${score}</strong><small>${suffix}</small><em>匹配度</em></span></div>`; }
 function tagList(items, cls=""){ return items.map(t=>`<span class="tag ${cls}">${t}</span>`).join(""); }
-function btn(text, cls="", page="", iconId=""){ return `<button class="btn ${cls}" ${page ? `data-page="${page}"` : ""}>${iconId ? icon(iconId) : ""}${text}</button>`; }
+function btn(text, cls="", page="", iconId="", action=""){ return `<button class="btn ${cls}" ${page ? `data-page="${page}"` : ""} ${action ? `data-action="${action}"` : ""}>${iconId ? icon(iconId) : ""}${text}</button>`; }
 function topSearch(placeholder){ return `<div class="search"><svg><use href="#i-search"/></svg><input placeholder="${placeholder}"></div>`; }
 function renderTopTools(page, placeholder){
   const search = topSearch(placeholder);
@@ -158,6 +167,148 @@ function bindClicks(){
       });
     }
   });
+  app.querySelectorAll("[data-action='start-analyze']").forEach(btn=>{
+    btn.addEventListener("click",async ()=>{
+      const textarea = app.querySelector(".match-panel textarea");
+      const jobText = textarea ? textarea.value : "";
+      btn.disabled = true;
+      btn.textContent = "AI 分析中...";
+      try {
+        const result = await api.analyzeMatch({
+          company_name: "腾讯科技（深圳）有限公司",
+          job_title: "高级产品经理",
+          job_text: jobText,
+          resume_id: 1,
+          portfolio_ids: [1]
+        });
+        btn.textContent = "正在生成分析结果...";
+        const pollRes = await api.pollResult(result.request_id, {interval: 3000});
+        if(pollRes.status === 'done' && pollRes.result) {
+          sessionStorage.setItem('currentMatchResult', JSON.stringify({
+            instanceId: result.instance_id,
+            ...pollRes.result
+          }));
+          setPage('result');
+        } else {
+          btn.textContent = "开始分析";
+          btn.disabled = false;
+          alert("分析超时，请稍后重试。如果你是第一次使用，可能需要我（AI）介入处理分析请求。");
+        }
+      } catch(e) {
+        btn.textContent = "开始分析";
+        btn.disabled = false;
+        alert("分析失败：" + e.message);
+      }
+    });
+  });
+  app.querySelectorAll("[data-action='submit-answer']").forEach(btn=>{
+    btn.addEventListener("click",async ()=>{
+      const textarea = app.querySelector(".answer-box textarea");
+      const answer = textarea ? textarea.value.trim() : "";
+      if(!answer) { alert("请先输入你的回答"); return; }
+      btn.disabled = true;
+      btn.textContent = "AI 评分中...";
+      try {
+        const interviewId = parseInt(sessionStorage.getItem('currentInterviewId') || '1');
+        const qIndex = parseInt(app.querySelector(".interview-head b")?.textContent || '1');
+        const result = await api.submitAnswer(interviewId, answer, qIndex - 1);
+        const pollRes = await api.pollResult(result.request_id, {interval: 3000});
+        if(pollRes.status === 'done' && pollRes.result) {
+          const data = pollRes.result;
+          if(data.score !== undefined) {
+            const evalDiv = app.querySelector(".eval");
+            if(evalDiv) {
+              evalDiv.innerHTML = `<h3>本题评估结果 <span class="muted">（AI 即时反馈）</span></h3><div class="grid" style="grid-template-columns:180px 1fr"><div><span class="muted">单题得分</span><div class="score-big eval-score">${data.score} <small>/100</small> <span class="pill">${data.score>=80?'优秀':data.score>=60?'良好':'一般'}</span></div><p class="muted">超过了 ${data.score}% 的同岗位候选人</p></div><div class="info-box"><b>本题考察维度</b><br>${tagList(data.dimensions||['逻辑思维','沟通能力'],'green')}</div></div>${(data.feedback||[]).map(f=>`<div class="eval-row"><b>${f.type||'建议'}</b><span class="muted">${f.content||''}</span></div>`).join('')}`;
+              evalDiv.style.display = "block";
+            }
+          }
+          if(data.next_question) {
+            const qDiv = app.querySelector(".question");
+            const ta = app.querySelector(".answer-box textarea");
+            if(qDiv) qDiv.innerHTML = `<p class="muted">AI 面试官提问</p><b>${data.next_question}</b><p class="muted">考察维度： 逻辑思维、抗压能力</p>`;
+            if(ta) ta.value = "";
+            const idxEl = app.querySelector(".interview-head b");
+            if(idxEl) idxEl.textContent = qIndex + 1;
+          }
+        } else {
+          alert("评分超时，请稍后重试");
+        }
+        btn.disabled = false;
+        btn.textContent = "提交回答";
+      } catch(e) {
+        btn.disabled = false;
+        btn.textContent = "提交回答";
+        alert("提交失败：" + e.message);
+      }
+    });
+  });
+  app.querySelectorAll("[data-action='end-interview']").forEach(btn=>{
+    btn.addEventListener("click",async ()=>{
+      const interviewId = parseInt(sessionStorage.getItem('currentInterviewId') || '0');
+      if(interviewId > 0) {
+        await api.finishInterview(interviewId);
+        setPage('report');
+      } else {
+        setPage('report');
+      }
+    });
+  });
+  app.querySelectorAll("[data-action='start-training']").forEach(btn=>{
+    btn.addEventListener("click",async ()=>{
+      try {
+        const matchData = JSON.parse(sessionStorage.getItem('currentMatchResult') || '{}');
+        const matchInstanceId = matchData.instanceId || null;
+        const result = await api.startInterview({
+          match_instance_id: matchInstanceId,
+          mode: 'train',
+          company_name: matchData.company_name || '腾讯科技',
+          job_title: matchData.job_title || '高级产品经理',
+          resume_text: matchData.resume_text || '',
+          jd_text: matchData.jd_text || ''
+        });
+        sessionStorage.setItem('currentInterviewId', result.interview_id);
+        sessionStorage.setItem('currentInterviewMode', 'train');
+        sessionStorage.setItem('currentInterviewRequestId', result.request_id);
+        const pollRes = await api.pollResult(result.request_id, {interval: 3000});
+        if(pollRes.status === 'done' && pollRes.result) {
+          sessionStorage.setItem('currentQuestion', pollRes.result.question || '请介绍一下你自己');
+        } else {
+          sessionStorage.setItem('currentQuestion', '请介绍一下你自己');
+        }
+        setPage('training');
+      } catch(e) {
+        alert("启动面试失败：" + e.message);
+      }
+    });
+  });
+  app.querySelectorAll("[data-action='start-simulation']").forEach(btn=>{
+    btn.addEventListener("click",async ()=>{
+      try {
+        const matchData = JSON.parse(sessionStorage.getItem('currentMatchResult') || '{}');
+        const matchInstanceId = matchData.instanceId || null;
+        const result = await api.startInterview({
+          match_instance_id: matchInstanceId,
+          mode: 'sim',
+          company_name: matchData.company_name || '腾讯科技',
+          job_title: matchData.job_title || '高级产品经理',
+          resume_text: matchData.resume_text || '',
+          jd_text: matchData.jd_text || ''
+        });
+        sessionStorage.setItem('currentInterviewId', result.interview_id);
+        sessionStorage.setItem('currentInterviewMode', 'sim');
+        sessionStorage.setItem('currentInterviewRequestId', result.request_id);
+        const pollRes = await api.pollResult(result.request_id, {interval: 3000});
+        if(pollRes.status === 'done' && pollRes.result) {
+          sessionStorage.setItem('currentQuestion', pollRes.result.question || '请介绍一下你自己');
+        } else {
+          sessionStorage.setItem('currentQuestion', '请介绍一下你自己');
+        }
+        setPage('simulation');
+      } catch(e) {
+        alert("启动面试失败：" + e.message);
+      }
+    });
+  });
 }
 
 function closeAllDropdowns(){
@@ -168,7 +319,7 @@ function closeAllDropdowns(){
 function showUploadModal(title, hint){
   const overlay = document.createElement("div");
   overlay.className = "modal-overlay";
-  overlay.innerHTML = `<div class="modal-box"><div class="modal-head"><h2>${title}</h2><button class="modal-close" data-action="close-modal">${icon("i-x")}</button></div><div class="modal-body"><div class="drop" style="min-height:140px;margin:0">${icon("i-upload")}<b>点击或拖拽文件到此处上传</b><small>${hint}</small></div><div class="modal-foot"><button class="btn" data-action="close-modal">取消</button> <button class="btn primary">确认上传</button></div></div></div>`;
+  overlay.innerHTML = `<div class="modal-box"><div class="modal-head"><h2>${title}</h2><button class="modal-close" data-action="close-modal">${icon("i-x")}</button></div><div class="modal-body"><div class="drop" id="upload-drop" style="min-height:140px;margin:0">${icon("i-upload")}<b>点击或拖拽文件到此处上传</b><small>${hint}</small></div><div id="upload-status" style="margin-top:10px"></div></div><div class="modal-foot"><button class="btn" data-action="close-modal">取消</button></div></div>`;
   document.body.appendChild(overlay);
   overlay.querySelectorAll("[data-action='close-modal']").forEach(b=>b.addEventListener("click",()=>overlay.remove()));
   overlay.addEventListener("click",(e)=>{ if(e.target===overlay) overlay.remove(); });
@@ -176,7 +327,29 @@ function showUploadModal(title, hint){
     const input = document.createElement("input");
     input.type = "file";
     input.accept = ".pdf,.doc,.docx,.png,.jpg";
-    input.onchange = ()=>{ overlay.querySelector(".drop").innerHTML = `<b>✓ 已选择：${input.files[0]?.name || "文件"}</b>`; };
+    input.onchange = async () => {
+      const file = input.files[0];
+      if(!file) return;
+      const drop = overlay.querySelector(".drop");
+      drop.innerHTML = `<b>正在上传：${file.name}</b>`;
+      const status = overlay.querySelector("#upload-status");
+      try {
+        const isResume = title.includes("简历");
+        const result = isResume
+          ? await api.uploadResume(file)
+          : await api.uploadPortfolio(file);
+        drop.innerHTML = `<b class="green">✓ 上传成功</b><br><small>${file.name}</small>`;
+        status.innerHTML = `<span class="green">解析完成，已添加到${isResume ? '简历库' : '作品库'}</span>`;
+        if(isResume){
+          const resumes = await api.getResumes();
+          window.__resumeData = resumes.map(r=>[r.filename, r.version||'v1.0', ...(r.parsed_data?.skills||['待解析']).slice(0,4), '', r.uploaded_at, '']);
+          setPage('resumes');
+        }
+        setTimeout(()=>overlay.remove(), 1500);
+      } catch(e) {
+        drop.innerHTML = `<b class="red">✗ 上传失败：${e.message}</b>`;
+      }
+    };
     input.click();
   });
 }
@@ -278,13 +451,15 @@ const views = {
       </section>`;
   },
   resumes(){
-    const resumes = [
+    const defaultData = [
       ["产品经理_张同学","v2.0","产品设计","需求分析","项目管理","数据分析","+3","2024-05-18 14:32","默认简历"],
       ["运营专员简历","v1.1","用户运营","活动策划","数据分析","内容运营","","2024-05-15 09:21",""],
       ["数据分析师_张同学","v1.3","SQL","数据建模","可视化分析","Python","+2","2024-05-12 16:45",""],
       ["后端开发工程师简历","v1.0","Java","Spring Boot","MySQL","分布式系统","+2","2024-05-08 11:30",""],
       ["市场营销简历","v1.0","市场分析","品牌推广","活动策划","渠道运营","","2024-05-05 10:12",""]
     ];
+    const resumes = window.__resumeData || defaultData;
+    const firstResume = resumes[0] || defaultData[0];
     return `
       <section class="card pad" style="display:grid;grid-template-columns:1fr 1fr 1fr;align-items:center;margin-bottom:18px">
         ${statInline("i-file","简历总数","8","份")}
@@ -369,24 +544,32 @@ const views = {
             <div class="confirm-list">${["公司名称|腾讯科技（深圳）有限公司","职位名称|高级产品经理","选择的简历|张同学 · 产品经理","选择的作品|3 项作品"].map(x=>{const [a,b]=x.split("|");return `<div><b class="muted">${a}</b><span>${b}</span></div>`}).join("")}</div>
             <div class="confirm-list"><h3 style="padding:16px;margin:0">资料清单（必备项）</h3>${["JD 文件|产品经理_JD_高级.pdf","公司介绍|腾讯公司介绍.docx","简历|张同学 · 产品经理","作品|已选择 3 项作品"].map(x=>{const [a,b]=x.split("|");return `<div><span class="green">● ${a}</span><span>${b}</span></div>`}).join("")}</div>
             <div class="safety"><b>数据安全与隐私保护</b><p>所有上传资料仅用于匹配度分析，不会用于其他用途，请放心使用。</p></div>
-            ${btn("开始分析","primary","result","i-target")} ${btn("取消")}
+            ${btn("开始分析","primary","","i-target","start-analyze")} ${btn("取消")}
           </div>
         </div>
       </section>`;
   },
   result(){
-    const cards = ["评分理由|你在智能硬件产品方向有 3 年完整工作经验，覆盖从 0 到 1 的产品定义与落地，经验高度相关。","优势亮点|在智能门锁项目中主导产品定义与功能规划，推动销量提升 60%，结果导向显著。","短板提醒|行业背景以消费电子为主，对智能家居生态的理解深度可进一步加强。","面试重点表达|重点讲述智能门锁项目从 0 到 1 的完整过程，突出关键决策与取舍思路。","潜在风险点|若无法清晰说明部分项目中的取舍与优先级判断，可能影响对你产品思维的评价。","建议准备方向|深入了解小米产品方法论与核心产品案例，准备 1-2 个更完整的项目细节。"];
+    let analysisData = null;
+    try { analysisData = JSON.parse(sessionStorage.getItem('currentMatchResult') || 'null'); } catch(e) {}
+    const score = analysisData?.total_score || 82;
+    const subScores = analysisData?.sub_scores || {"岗位经验匹配":16,"专业能力匹配":17,"行业背景匹配":13,"项目/作品匹配":18,"软素质匹配":18};
+    const defaultCards = ["评分理由|你在智能硬件产品方向有 3 年完整工作经验，覆盖从 0 到 1 的产品定义与落地，经验高度相关。","优势亮点|在智能门锁项目中主导产品定义与功能规划，推动销量提升 60%，结果导向显著。","短板提醒|行业背景以消费电子为主，对智能家居生态的理解深度可进一步加强。","面试重点表达|重点讲述智能门锁项目从 0 到 1 的完整过程，突出关键决策与取舍思路。","潜在风险点|若无法清晰说明部分项目中的取舍与优先级判断，可能影响对你产品思维的评价。","建议准备方向|深入了解小米产品方法论与核心产品案例，准备 1-2 个更完整的项目细节。"];
+    const cards = analysisData?.analysis_cards || defaultCards;
+    const company = analysisData?.company_name || "小米科技有限责任公司";
+    const jobTitle = analysisData?.job_title || "产品经理（智能硬件方向）";
+    const companyCode = analysisData?.company_code || "mi";
     return `
       <section class="result-hero card">
-        <div>${ring(82,"lg")}</div>
-        <div>${logo("mi","mi")} <b>小米科技有限责任公司</b><h2>产品经理（智能硬件方向）</h2><p class="muted">匹配时间： 2024-05-20 10:30　｜　简历： 张同学_产品经理简历.pdf</p></div>
+        <div>${ring(score,"lg")}</div>
+        <div>${logo(companyCode, companyCode==="mi"?"mi":companyCode==="bd"?"▮":"AI")} <b>${company}</b><h2>${jobTitle}</h2><p class="muted">匹配时间： ${new Date().toLocaleDateString('zh-CN')}　｜　简历： ${analysisData?.resume_name || '张同学_产品经理简历.pdf'}</p></div>
         <div class="safety">${icon("i-badge")} 整体匹配度较高，具备较强的岗位胜任力，建议针对性强化短板，提升面试竞争力。</div>
       </section>
       <section class="grid subscores">
-        ${[["岗位经验匹配",16,"较高"],["专业能力匹配",17,"较高"],["行业背景匹配",13,"中等"],["项目/作品匹配",18,"较高"],["软素质匹配",18,"较高"]].map(s=>`<div class="subscore card"><div class="round-ico">${icon("i-folder")}</div><div><span class="muted">${s[0]}</span><div class="big">${s[1]} <small>/20</small></div><b class="green">${s[2]}</b></div></div>`).join("")}
+        ${Object.entries(subScores).map(([k,v])=>`<div class="subscore card"><div class="round-ico">${icon("i-folder")}</div><div><span class="muted">${k}</span><div class="big">${v} <small>/20</small></div><b class="green">${v>=16?"较高":v>=12?"中等":"较低"}</b></div></div>`).join("")}
       </section>
       <section class="grid result-grid">${cards.map((c,i)=>{const [h,b]=c.split("|");return `<div class="text-card card"><h3>${icon(["i-file","i-star","i-bell","i-target","i-badge","i-chart"][i])}${h}</h3><ul><li>${b}</li><li>${i%2?"具备跨部门协作与项目推进能力，能高效推动研发、设计、供应链协同落地。":"具备用户研究、需求分析、产品规划到项目推进的完整闭环能力。"}</li><li>${i%3?"数据分析能力优秀，能够基于用户行为数据驱动产品迭代与优化。":"面试中需要清晰呈现你的产品方法论与关键决策思路。"}</li></ul></div>`}).join("")}</section>
-      <section class="fixed-actions">${btn("保留分析记录","ghost-green","","i-upload")}${btn("清除本次分析记录","ghost-green","","i-x")}${btn("进入面试训练","primary","training","i-target")}${btn("进入模拟面试","primary","simulation","i-user")}</section>`;
+      <section class="fixed-actions">${btn("保留分析记录","ghost-green","","i-upload")}${btn("清除本次分析记录","ghost-green","","i-x")}${btn("进入面试训练","primary","","i-target","start-training")}${btn("进入模拟面试","primary","","i-user","start-simulation")}</section>`;
   },
   records(){
     return `
@@ -490,7 +673,7 @@ function interviewPage(sim){
       <main class="main-interview card">
         <div class="interview-head">${logo("bd")}<h2>字节跳动</h2><h2>后端开发工程师</h2><span class="pill">训练模式</span><span style="margin-left:auto">第 <b>3</b> / 12 题</span><div class="progress"><div class="bar"><i style="width:36%"></i></div></div></div>
         <div class="question"><p class="muted">AI 面试官提问</p><b>请你设计一个高并发的短链接服务，要求支持日均 10 亿次访问，短链包含自定义后缀，并需要保证全局唯一和可用性。请说明整体架构设计、核心模块、关键技术选型以及如何保障系统的高可用和可扩展性。</b><p class="muted">考察维度： 系统设计能力、架构思维、数据结构与算法、高并发处理、可用性设计</p></div>
-        <div class="answer-box"><div class="section-title"><h3>我的回答</h3><div style="display:flex;gap:8px">${btn("全屏编辑","soft","","i-expand")} ${btn("语音输入","soft","","i-mic")}</div></div><textarea placeholder="在此输入你的回答... （支持 Markdown）"></textarea><div class="answer-actions">${btn("提交回答","primary")}${btn("重新作答","","","i-clock")}${btn("结束训练","red","report","i-file")}<span style="margin-left:auto">${btn("下一题","soft","","i-arrow")}</span></div></div>
+        <div class="answer-box"><div class="section-title"><h3>我的回答</h3><div style="display:flex;gap:8px">${btn("全屏编辑","soft","","i-expand")} ${btn("语音输入","soft","","i-mic")}</div></div><textarea placeholder="在此输入你的回答... （支持 Markdown）"></textarea><div class="answer-actions">${btn("提交回答","primary","","","submit-answer")}${btn("重新作答","","","i-clock")}${btn("结束训练","red","","i-file","end-interview")}<span style="margin-left:auto">${btn("下一题","soft","","i-arrow")}</span></div></div>
         <div class="eval card pad"><h3>本题评估结果 <span class="muted">（AI 即时反馈）</span></h3><div class="grid" style="grid-template-columns:180px 1fr"><div><span class="muted">单题得分</span><div class="score-big eval-score">86 <small>/100</small> <span class="pill">优秀</span></div><p class="muted">超过了 86% 的同岗位候选人</p></div><div class="info-box"><b>本题考察维度</b><br>${tagList(["系统设计能力","高并发处理","架构思维","可用性设计","数据结构与算法"],"green")}</div></div>
           ${["回答亮点|整体架构分层清晰，考虑了读写分离与缓存策略。","问题不足|短链唯一性生成方案部分细节不够，未说明冲突处理机制。","优化建议|补充短链 ID 生成算法、热点 Key 处理、限流降级与容量规划思路。","优化版回答（参考）|整体架构我会从接入层、服务层、存储层和基础设施层的分层设计展开..."].map(x=>{const [a,b]=x.split("|");return `<div class="eval-row"><b>${a}</b><span class="muted">${b}</span></div>`}).join("")}
         </div>
